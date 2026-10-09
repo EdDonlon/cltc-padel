@@ -13,11 +13,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        /* Main App Background & Font Styling */
-        .stApp {
-            background-color: #f8f9fa;
-        }
-
         /* Custom Header Banner with Court Background Image */
         .header-container {
             background: linear-gradient(rgba(27, 77, 62, 0.88), rgba(46, 204, 113, 0.88)), 
@@ -40,13 +35,14 @@ st.markdown(
             font-size: 1.1rem;
         }
 
-        /* Card Styling for Results */
+        /* Card Styling for Results - Adapts to Light/Dark Mode */
         .result-card {
-            background-color: white;
+            background-color: var(--secondary-background-color);
+            color: var(--text-color);
             padding: 1rem 1.2rem;
             border-radius: 8px;
             border-left: 5px solid #2ecc71;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 0.8rem;
             font-size: 1rem;
         }
@@ -82,7 +78,7 @@ def load_results_data():
     except Exception:
         return pd.DataFrame()
 
-# Styling function to highlight top 2 playoff spots & shade Total Points grey
+# Styling function to highlight top 2 playoff spots & shade Total Points column safely for themes
 def style_league_table(df):
     def apply_styles(row):
         styles = [''] * len(row)
@@ -97,11 +93,11 @@ def style_league_table(df):
 
     styled = df.style.apply(apply_styles, axis=1)
     
-    # Shade the 'Total Points' column in grey to emphasize importance
+    # Shade the 'Total Points' column using Streamlit conditional / neutral fallback colors
     if "Total Points" in df.columns:
         styled = styled.set_properties(
             subset=["Total Points"], 
-            props="background-color: #e0e0e0; font-weight: bold; color: #000000;"
+            props="background-color: rgba(128, 128, 128, 0.2); font-weight: bold;"
         )
         
     return styled
@@ -130,10 +126,6 @@ try:
     ])
 
     with tab_emerald:
-        # Optional: Add logo if file exists (e.g., emerald_logo.png in project directory)
-        #if Path("images/Emerald Logo.jpg").exists():
-        #    st.image("images/Emerald Logo.jpg", width=120)
-            
         st.subheader("Emerald Division Standings")
         st.markdown("*(Top 2 teams qualify for the semi-finals!)*")
         st.dataframe(
@@ -167,7 +159,6 @@ try:
             st.info("No results recorded yet.")
 
     with tab_shamrock:
-        # Optional: Add logo if file exists (e.g., shamrock_logo.png in project directory)
         if Path("shamrock_logo.png").exists():
             st.image("shamrock_logo.png", width=120)
             
