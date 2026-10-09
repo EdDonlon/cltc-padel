@@ -1,8 +1,7 @@
-# :earth_americas: GDP dashboard template
+# Charleville LTC Padel Box League Sep-Nov 2026
 
-A simple Streamlit app showing the GDP of different countries in the world.
+A simple Streamlit app showing live results & leag tables for a padel box league.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://gdp-dashboard-template.streamlit.app/)
 
 ### How to run it on your own machine
 
