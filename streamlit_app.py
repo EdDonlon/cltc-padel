@@ -570,3 +570,18 @@ try:
 except Exception as e:
     st.error(f"Could not load league tables: {e}")
     st.info("Ensure that your Google Sheet is shared with 'Anyone with the link can view'.")
+
+# Direct MP4 link from Giphy's CDN for this sticker
+giphy_mp4_url = "https://media.giphy.com/media/j0YrtFmQoUs2u2Lgv3/giphy.mp4"
+
+# HTML5 video embed configured for background/sticker looping
+video_html = f"""
+    <div style="display: flex; justify-content: center;">
+        <video width="300" autoplay loop muted playsinline style="background: transparent;">
+            <source src="{giphy_mp4_url}" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+    </div>
+"""
+
+st.markdown(video_html, unsafe_allow_html=True)
