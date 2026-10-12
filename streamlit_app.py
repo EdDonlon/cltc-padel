@@ -89,6 +89,45 @@ def sort_results_newest_first(results):
         .drop(columns="_match_date")
     )
 
+def filter_results_by_team(results, division_data, key):
+    if "Team" not in division_data.columns or not {"Winning Team", "Losing Team"}.issubset(results.columns):
+        return results, "All"
+
+    teams = (
+        division_data["Team"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+    teams = teams[teams.ne("")].drop_duplicates().tolist()
+    selected_team = st.selectbox("Filter results by team", ["All", *teams], key=key)
+
+    if selected_team != "All":
+        winners = results["Winning Team"].fillna("").astype(str).str.strip()
+        losers = results["Losing Team"].fillna("").astype(str).str.strip()
+        results = results[winners.eq(selected_team) | losers.eq(selected_team)]
+
+    return results, selected_team
+
+def parse_news_posts(news_markdown):
+    posts = []
+    current_title = None
+    current_body = []
+
+    for line in news_markdown.splitlines():
+        if line.startswith("## "):
+            if current_title:
+                posts.append((current_title, "\n".join(current_body).strip()))
+            current_title = line[3:].strip()
+            current_body = []
+        elif current_title:
+            current_body.append(line)
+
+    if current_title:
+        posts.append((current_title, "\n".join(current_body).strip()))
+
+    return posts
+
 def build_advanced_stats(emerald_standings, shamrock_standings, results):
     start_date = pd.Timestamp("2026-10-05")
     today = pd.Timestamp.today().normalize()
@@ -309,13 +348,23 @@ def build_head_to_head_table(division_data, results_data, division_name):
     return table
 
 def style_head_to_head_table(table):
+    table = table.rename(
+        index=lambda team: team.replace("&", "&\n"),
+        columns=lambda team: team.replace("&", "&\n"),
+    )
+
     def style_diagonal(row):
         return [
             "background-color: rgba(128, 128, 128, 0.35)" if row.name == column else ""
             for column in table.columns
         ]
 
-    return table.style.apply(style_diagonal, axis=1)
+    return (
+        table.style.apply(style_diagonal, axis=1)
+        .set_table_styles(
+            [{"selector": "th.row_heading, th.col_heading", "props": [("white-space", "pre-line")]}]
+        )
+    )
 
 def team_at_position(standings, position):
     if "Position" not in standings.columns or "Team" not in standings.columns:
@@ -369,11 +418,12 @@ try:
     results_df = load_results_data()
 
     # Create top-level tabs
-    tab_emerald, tab_shamrock, tab_playoffs, tab_stats, tab_rules = st.tabs([
+    tab_emerald, tab_shamrock, tab_playoffs, tab_stats, tab_news, tab_rules = st.tabs([
         "🟢 Emerald Division", 
         "☘️ Shamrock Division",
         "🏆 Playoffs",
         "📊 Advanced stats",
+        "📰 News",
         "📖 League Rules"
     ])
 
@@ -393,21 +443,27 @@ try:
                 results_df[results_df["Select your Box League Division"].str.contains("Emerald", na=False)]
             )
             if not em_results.empty:
-                with st.container(height=270):
-                    for _, row in em_results.iterrows():
-                        winner = row.get("Winning Team", "")
-                        loser = row.get("Losing Team", "")
-                        w_score = row.get("Winning Team Score (Games won)", "")
-                        l_score = row.get("Losing Team Score (Games won)", "")
-                        date = row.get("Date of Match", "")
-                        st.markdown(
-                            f"""
-                            <div class="result-card">
-                                📅 <b>{date}</b> &nbsp;|&nbsp; 🏆 <b>{winner}</b> ({w_score}) vs. {loser} ({l_score})
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
+                em_results, selected_team = filter_results_by_team(
+                    em_results, emerald_df, "emerald_results_team_filter"
+                )
+                if not em_results.empty:
+                    with st.container(height=270):
+                        for _, row in em_results.iterrows():
+                            winner = row.get("Winning Team", "")
+                            loser = row.get("Losing Team", "")
+                            w_score = row.get("Winning Team Score (Games won)", "")
+                            l_score = row.get("Losing Team Score (Games won)", "")
+                            date = row.get("Date of Match", "")
+                            st.markdown(
+                                f"""
+                                <div class="result-card">
+                                    📅 <b>{date}</b> &nbsp;|&nbsp; 🏆 <b>{winner}</b> ({w_score}) vs. {loser} ({l_score})
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                else:
+                    st.info(f"No results found for {selected_team}.")
             else:
                 st.info("No results recorded for the Emerald Division yet.")
         else:
@@ -444,21 +500,27 @@ try:
                 results_df[results_df["Select your Box League Division"].str.contains("Shamrock", na=False)]
             )
             if not sh_results.empty:
-                with st.container(height=270):
-                    for _, row in sh_results.iterrows():
-                        winner = row.get("Winning Team", "")
-                        loser = row.get("Losing Team", "")
-                        w_score = row.get("Winning Team Score (Games won)", "")
-                        l_score = row.get("Losing Team Score (Games won)", "")
-                        date = row.get("Date of Match", "")
-                        st.markdown(
-                            f"""
-                            <div class="result-card">
-                                📅 <b>{date}</b> &nbsp;|&nbsp; 🏆 <b>{winner}</b> ({w_score}) vs. {loser} ({l_score})
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
+                sh_results, selected_team = filter_results_by_team(
+                    sh_results, shamrock_df, "shamrock_results_team_filter"
+                )
+                if not sh_results.empty:
+                    with st.container(height=270):
+                        for _, row in sh_results.iterrows():
+                            winner = row.get("Winning Team", "")
+                            loser = row.get("Losing Team", "")
+                            w_score = row.get("Winning Team Score (Games won)", "")
+                            l_score = row.get("Losing Team Score (Games won)", "")
+                            date = row.get("Date of Match", "")
+                            st.markdown(
+                                f"""
+                                <div class="result-card">
+                                    📅 <b>{date}</b> &nbsp;|&nbsp; 🏆 <b>{winner}</b> ({w_score}) vs. {loser} ({l_score})
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                else:
+                    st.info(f"No results found for {selected_team}.")
             else:
                 st.info("No results recorded for the Shamrock Division yet.")
         else:
@@ -558,6 +620,26 @@ try:
             use_container_width=True,
         )
 
+    with tab_news:
+        st.subheader("League News")
+        try:
+            news_markdown = Path("news.md").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            st.error("news.md file not found. Please create it in your project root.")
+        else:
+            news_posts = parse_news_posts(news_markdown)
+            if not news_posts:
+                st.info(
+                    "No news posts yet. Add posts to news.md using a level-two heading "
+                    "(## Post title), then write the post content in Markdown. "
+                    "List the newest post first."
+                )
+            for title, body in news_posts:
+                with st.container(border=True):
+                    st.markdown(f"### {title}")
+                    if body:
+                        st.markdown(body)
+
     with tab_rules:
         st.subheader("Charleville LTC Padel Box League Rules")
         try:
@@ -576,8 +658,8 @@ giphy_mp4_url = "https://media.giphy.com/media/j0YrtFmQoUs2u2Lgv3/giphy.mp4"
 
 # HTML5 video embed configured for background/sticker looping
 video_html = f"""
-    <div style="display: flex; justify-content: center;">
-        <video width="300" autoplay loop muted playsinline style="background: transparent;">
+    <div style="display: flex; justify-content: center; box-shadow: none;">
+        <video width="300" autoplay loop muted playsinline style="background: transparent; box-shadow: none; border: none; outline: none; filter: none;">
             <source src="{giphy_mp4_url}" type="video/mp4">
             Your browser does not support the video tag.
         </video>
