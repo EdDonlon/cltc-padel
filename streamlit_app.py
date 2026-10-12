@@ -1,5 +1,8 @@
+from html import escape
+from itertools import combinations
 from pathlib import Path
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -128,10 +131,116 @@ def parse_news_posts(news_markdown):
 
     return posts
 
+def estimate_playoff_probabilities(standings, results, division_name, simulations=10_000):
+    if "Team" not in standings.columns:
+        return pd.DataFrame(columns=["Team", "Playoff probability"])
+
+    teams = standings["Team"].dropna().astype(str).str.strip()
+    teams = list(dict.fromkeys(team for team in teams if team))
+    team_count = len(teams)
+    if not team_count:
+        return pd.DataFrame(columns=["Team", "Playoff probability"])
+
+    team_indexes = {team: index for index, team in enumerate(teams)}
+    if "Total Points" in standings.columns:
+        points_by_team = (
+            standings.assign(_team=standings["Team"].astype(str).str.strip())
+            .drop_duplicates("_team")
+            .set_index("_team")["Total Points"]
+        )
+        current_points = pd.to_numeric(points_by_team.reindex(teams), errors="coerce").fillna(0).to_numpy()
+    else:
+        current_points = np.zeros(team_count)
+
+    columns = {
+        "Select your Box League Division",
+        "Winning Team",
+        "Losing Team",
+        "Winning Team Score (Games won)",
+        "Losing Team Score (Games won)",
+    }
+    valid_results = pd.DataFrame()
+    if columns.issubset(results.columns):
+        valid_results = results[
+            results["Select your Box League Division"]
+            .astype("string")
+            .str.contains(division_name, case=False, na=False, regex=False)
+        ].copy()
+        valid_results["_winner"] = valid_results["Winning Team"].astype("string").str.strip()
+        valid_results["_loser"] = valid_results["Losing Team"].astype("string").str.strip()
+        valid_results["_winning_games"] = pd.to_numeric(
+            valid_results["Winning Team Score (Games won)"], errors="coerce"
+        )
+        valid_results["_losing_games"] = pd.to_numeric(
+            valid_results["Losing Team Score (Games won)"], errors="coerce"
+        )
+        valid_results = valid_results[
+            valid_results["_winner"].isin(teams)
+            & valid_results["_loser"].isin(teams)
+            & valid_results["_winner"].ne(valid_results["_loser"])
+            & valid_results["_winning_games"].ge(0)
+            & valid_results["_losing_games"].ge(0)
+        ]
+
+    games_won = np.zeros(team_count)
+    games_played = np.zeros(team_count)
+    played_pairings = set()
+    for _, match in valid_results.iterrows():
+        winner = team_indexes[match["_winner"]]
+        loser = team_indexes[match["_loser"]]
+        winner_games = match["_winning_games"]
+        loser_games = match["_losing_games"]
+        if pd.isna(winner_games) or pd.isna(loser_games):
+            continue
+        games_won[winner] += winner_games
+        games_won[loser] += loser_games
+        games_played[winner] += winner_games + loser_games
+        games_played[loser] += winner_games + loser_games
+        played_pairings.add(frozenset((winner, loser)))
+
+    # Smooth small samples toward an even game split; unplayed teams start at 50%.
+    game_win_rates = (games_won + 8.5) / (games_played + 17)
+    rng = np.random.default_rng(20261012 if division_name == "Emerald" else 20261013)
+    final_points = np.tile(current_points, (simulations, 1))
+
+    for team_a, team_b in combinations(range(team_count), 2):
+        if frozenset((team_a, team_b)) in played_pairings:
+            continue
+
+        probability_a_wins_game = game_win_rates[team_a] / (
+            game_win_rates[team_a] + game_win_rates[team_b]
+        )
+        games_a = rng.binomial(17, probability_a_wins_game, size=simulations)
+        games_b = 17 - games_a
+        final_points[:, team_a] += games_a + (games_a > games_b) * 2
+        final_points[:, team_b] += games_b + (games_b > games_a) * 2
+
+    playoff_slots = min(2, team_count)
+    cutoff = np.partition(final_points, -playoff_slots, axis=1)[:, -playoff_slots]
+    above_cutoff = final_points > cutoff[:, np.newaxis]
+    tied_at_cutoff = final_points == cutoff[:, np.newaxis]
+    slots_left = playoff_slots - above_cutoff.sum(axis=1)
+    tie_count = tied_at_cutoff.sum(axis=1)
+    playoff_shares = above_cutoff + tied_at_cutoff * (
+        slots_left / tie_count
+    )[:, np.newaxis]
+    probabilities = playoff_shares.mean(axis=0)
+
+    return (
+        pd.DataFrame({"Team": teams, "Playoff probability": probabilities})
+        .sort_values("Playoff probability", ascending=False, kind="stable")
+        .reset_index(drop=True)
+    )
+
 def build_advanced_stats(emerald_standings, shamrock_standings, results):
     start_date = pd.Timestamp("2026-10-05")
     today = pd.Timestamp.today().normalize()
-    week_starts = pd.date_range(start=start_date, end=max(today, start_date), freq="W-MON")
+    current_week_start = today - pd.Timedelta(days=today.weekday())
+    week_starts = pd.date_range(
+        start=start_date,
+        end=current_week_start - pd.Timedelta(days=7),
+        freq="W-MON",
+    )
     division_standings = {
         "Emerald": emerald_standings,
         "Shamrock": shamrock_standings,
@@ -202,7 +311,7 @@ def build_advanced_stats(emerald_standings, shamrock_standings, results):
         if not division_matches.empty:
             weekly_matches = division_matches[
                 division_matches["_match_date"].ge(start_date)
-                & division_matches["_match_date"].le(today)
+                & division_matches["_match_date"].lt(current_week_start)
             ].copy()
             if not weekly_matches.empty:
                 weekly_matches["_week"] = (
@@ -215,6 +324,8 @@ def build_advanced_stats(emerald_standings, shamrock_standings, results):
             weekly_counts = pd.Series(dtype=int)
         weekly_match_averages[division] = (
             weekly_counts.reindex(week_starts, fill_value=0).sum() / len(week_starts)
+            if len(week_starts)
+            else float("nan")
         )
 
         if "Team" in standings.columns:
@@ -348,22 +459,40 @@ def build_head_to_head_table(division_data, results_data, division_name):
     return table
 
 def style_head_to_head_table(table):
-    table = table.rename(
-        index=lambda team: team.replace("&", "&\n"),
-        columns=lambda team: team.replace("&", "&\n"),
-    )
+    def team_label(team):
+        return escape(str(team), quote=True).replace("&amp;", "&amp;<br>")
 
-    def style_diagonal(row):
-        return [
-            "background-color: rgba(128, 128, 128, 0.35)" if row.name == column else ""
-            for column in table.columns
-        ]
+    table_header_style = (
+        "padding: 0.5rem; text-align: left; vertical-align: top; "
+        "border: 1px solid rgba(128, 128, 128, 0.25); "
+        "background-color: rgba(128, 128, 128, 0.08);"
+    )
+    cell_style = "padding: 0.5rem; border: 1px solid rgba(128, 128, 128, 0.25);"
+    headers = "".join(
+        f'<th style="{table_header_style}">{team_label(team)}</th>'
+        for team in table.columns
+    )
+    rows = []
+    for team, values in table.iterrows():
+        cells = []
+        for opponent, value in values.items():
+            background = (
+                "background-color: rgba(128, 128, 128, 0.35);"
+                if team == opponent
+                else ""
+            )
+            cells.append(
+                f'<td style="{cell_style} {background}">{escape(str(value), quote=True)}</td>'
+            )
+        rows.append(
+            f'<tr><th style="{table_header_style}">{team_label(team)}</th>{"".join(cells)}</tr>'
+        )
 
     return (
-        table.style.apply(style_diagonal, axis=1)
-        .set_table_styles(
-            [{"selector": "th.row_heading, th.col_heading", "props": [("white-space", "pre-line")]}]
-        )
+        '<div style="overflow-x: auto;"><table style="width: 100%; '
+        'border-collapse: collapse; font-size: 0.85rem;">'
+        f'<thead><tr><th style="{table_header_style}">Pairing</th>{headers}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
     )
 
 def team_at_position(standings, position):
@@ -476,9 +605,9 @@ try:
         if emerald_head_to_head.empty:
             st.info("Pairing data is not available for the Emerald Division.")
         else:
-            st.dataframe(
+            st.markdown(
                 style_head_to_head_table(emerald_head_to_head),
-                use_container_width=True,
+                unsafe_allow_html=True,
             )
 
     with tab_shamrock:
@@ -533,9 +662,9 @@ try:
         if shamrock_head_to_head.empty:
             st.info("Pairing data is not available for the Shamrock Division.")
         else:
-            st.dataframe(
+            st.markdown(
                 style_head_to_head_table(shamrock_head_to_head),
-                use_container_width=True,
+                unsafe_allow_html=True,
             )
 
     with tab_playoffs:
@@ -576,7 +705,7 @@ try:
         st.subheader("Advanced stats")
         st.caption(
             "Statistics use valid results matched to teams in the current standings. "
-            "Weekly match averages use Monday-to-Sunday weeks from October 5, including the current week."
+            "Weekly match averages use completed Monday-to-Sunday weeks from October 5."
         )
         stats = build_advanced_stats(emerald_df, shamrock_df, results_df)
 
@@ -593,7 +722,7 @@ try:
         )
 
         st.markdown("### Average matches played per week")
-        st.caption("Average matches recorded per calendar week since October 5, including the current week.")
+        st.caption("Average matches recorded per completed calendar week since October 5.")
         st.altair_chart(
             division_bar_chart(
                 stats["average_matches_per_week"],
@@ -619,6 +748,47 @@ try:
             ),
             use_container_width=True,
         )
+
+        st.markdown("### Playoff probability")
+        st.caption(
+            "Estimated top-two chances from 10,000 simulations of the remaining round-robin matches. "
+            "Current league points are retained; future 17-game match scores use each team's "
+            "recorded game-win rate, smoothed toward 50%. Teams with no results use the 50% baseline. "
+            "Tied positions at the cutoff share the available playoff probability."
+        )
+        emerald_probabilities = estimate_playoff_probabilities(
+            emerald_df, results_df, "Emerald"
+        )
+        shamrock_probabilities = estimate_playoff_probabilities(
+            shamrock_df, results_df, "Shamrock"
+        )
+        emerald_column, shamrock_column = st.columns(2)
+        with emerald_column:
+            st.markdown("#### Emerald Division")
+            st.dataframe(
+                emerald_probabilities,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Playoff probability": st.column_config.NumberColumn(
+                        "Playoff probability",
+                        format="percent",
+                    )
+                },
+            )
+        with shamrock_column:
+            st.markdown("#### Shamrock Division")
+            st.dataframe(
+                shamrock_probabilities,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Playoff probability": st.column_config.NumberColumn(
+                        "Playoff probability",
+                        format="percent",
+                    )
+                },
+            )
 
     with tab_news:
         st.subheader("League News")
@@ -659,7 +829,7 @@ giphy_mp4_url = "https://media.giphy.com/media/j0YrtFmQoUs2u2Lgv3/giphy.mp4"
 # HTML5 video embed configured for background/sticker looping
 video_html = f"""
     <div style="display: flex; justify-content: center; box-shadow: none;">
-        <video width="300" autoplay loop muted playsinline style="background: transparent; box-shadow: none; border: none; outline: none; filter: none;">
+        <video width="250" autoplay loop muted playsinline style="background: transparent; box-shadow: none; border: none; outline: none; filter: none;">
             <source src="{giphy_mp4_url}" type="video/mp4">
             Your browser does not support the video tag.
         </video>
