@@ -227,6 +227,114 @@ def estimate_playoff_probabilities(standings, results, division_name, simulation
         .reset_index(drop=True)
     )
 
+def estimate_fixture_completion(emerald_standings, shamrock_standings, results, as_of=None):
+    start_date = pd.Timestamp("2026-10-05")
+    deadline = pd.Timestamp("2026-11-08")
+    as_of = pd.Timestamp.today().normalize() if as_of is None else pd.Timestamp(as_of).normalize()
+    division_standings = {
+        "Emerald": emerald_standings,
+        "Shamrock": shamrock_standings,
+    }
+    required_columns = {
+        "Date of Match",
+        "Select your Box League Division",
+        "Winning Team",
+        "Losing Team",
+        "Winning Team Score (Games won)",
+        "Losing Team Score (Games won)",
+    }
+    if not required_columns.issubset(results.columns):
+        return None
+
+    teams_by_division = {}
+    possible_pairings = 0
+    for division, standings in division_standings.items():
+        if "Team" not in standings.columns:
+            return None
+        teams = standings["Team"].dropna().astype(str).str.strip()
+        teams = list(dict.fromkeys(team for team in teams if team))
+        if not teams:
+            return None
+        teams_by_division[division] = set(teams)
+        possible_pairings += len(teams) * (len(teams) - 1) // 2
+
+    matches = results.copy()
+    matches["_division"] = matches["Select your Box League Division"].astype("string")
+    matches["_date"] = pd.to_datetime(
+        matches["Date of Match"], dayfirst=True, errors="coerce"
+    )
+    matches["_winner"] = matches["Winning Team"].astype("string").str.strip()
+    matches["_loser"] = matches["Losing Team"].astype("string").str.strip()
+    matches["_winning_games"] = pd.to_numeric(
+        matches["Winning Team Score (Games won)"], errors="coerce"
+    )
+    matches["_losing_games"] = pd.to_numeric(
+        matches["Losing Team Score (Games won)"], errors="coerce"
+    )
+    matches["_division_name"] = matches["_division"].map(
+        lambda value: next(
+            (
+                division for division in teams_by_division
+                if pd.notna(value) and division.lower() in value.lower()
+            ),
+            None,
+        )
+    )
+    matches = matches[
+        matches["_division_name"].notna()
+        & matches.apply(
+            lambda row: (
+                row["_winner"] in teams_by_division[row["_division_name"]]
+                and row["_loser"] in teams_by_division[row["_division_name"]]
+            ),
+            axis=1,
+        )
+        & matches["_winner"].ne(matches["_loser"])
+        & matches["_winning_games"].ge(0)
+        & matches["_losing_games"].ge(0)
+        & (matches["_date"].isna() | matches["_date"].le(as_of))
+    ].copy()
+    matches["_pairing"] = matches.apply(
+        lambda row: (
+            row["_division_name"],
+            frozenset((row["_winner"], row["_loser"])),
+        ),
+        axis=1,
+    )
+    completed_pairings = set(matches["_pairing"])
+    remaining = max(possible_pairings - len(completed_pairings), 0)
+
+    elapsed_days = max((as_of - start_date).days, 0)
+    forecast_days = max((deadline - as_of).days, 0)
+    dated_pairings = matches[
+        matches["_date"].ge(start_date)
+        & matches["_date"].le(as_of)
+    ].sort_values("_date").drop_duplicates("_pairing")
+    completed_per_day = len(dated_pairings) / elapsed_days if elapsed_days else 0
+    expected_fixtures = completed_per_day * forecast_days
+
+    if remaining == 0:
+        probability = 1.0
+    elif elapsed_days == 0 or forecast_days == 0:
+        probability = 0.0
+    else:
+        probability_below_needed = np.exp(-expected_fixtures)
+        term = probability_below_needed
+        for count in range(1, remaining):
+            term *= expected_fixtures / count
+            probability_below_needed += term
+        probability = float(np.clip(1 - probability_below_needed, 0, 1))
+
+    return {
+        "deadline": deadline,
+        "possible": possible_pairings,
+        "completed": len(completed_pairings),
+        "remaining": remaining,
+        "fixtures_per_week": completed_per_day * 7,
+        "expected_by_deadline": expected_fixtures,
+        "probability": probability,
+    }
+
 def build_advanced_stats(emerald_standings, shamrock_standings, results):
     start_date = pd.Timestamp("2026-10-05")
     today = pd.Timestamp.today().normalize()
@@ -469,7 +577,14 @@ def build_position_history(standings, results, division_name):
 
 def team_position_chart(history):
     team_count = history["Team"].nunique()
-    return alt.Chart(history).mark_line(
+    chart_data = history.copy()
+    chart_data["Team initials"] = chart_data["Team"].map(
+        lambda team: " & ".join(
+            "".join(part[0] for part in person.split() if part)
+            for person in team.split("&")
+        )
+    )
+    return alt.Chart(chart_data).mark_line(
         point=True, interpolate="linear"
     ).encode(
         x=alt.X("Date:T", title="Match date"),
@@ -477,9 +592,19 @@ def team_position_chart(history):
             "Position:Q",
             title="Position",
             scale=alt.Scale(reverse=True, domain=[1, team_count]),
-            axis=alt.Axis(tickMinStep=1),
+            axis=alt.Axis(values=list(range(1, team_count + 1)), format="d"),
         ),
-        color=alt.Color("Team:N", legend=alt.Legend(title="Team")),
+        color=alt.Color(
+            "Team initials:N",
+            legend=alt.Legend(
+                title="Team",
+                orient="bottom",
+                direction="horizontal",
+                columns=3,
+                symbolLimit=0,
+                labelLimit=0,
+            ),
+        ),
         detail="Team:N",
         order="Date:T",
         tooltip=[
@@ -831,6 +956,31 @@ try:
             ),
             use_container_width=True,
         )
+
+        st.markdown("### Chance of completing all fixtures by November 8")
+        fixture_forecast = estimate_fixture_completion(
+            emerald_df, shamrock_df, results_df
+        )
+        if fixture_forecast is None:
+            st.info("Fixture completion probability is unavailable because division or result data is missing.")
+        else:
+            with st.container(border=True):
+                st.metric(
+                    "Estimated chance all divisional fixtures finish by November 8",
+                    f"{fixture_forecast['probability']:.0%}",
+                )
+                st.caption(
+                    f"{fixture_forecast['completed']} of {fixture_forecast['possible']} "
+                    f"unique fixtures complete across both divisions; "
+                    f"{fixture_forecast['remaining']} remain. Current combined pace: "
+                    f"{fixture_forecast['fixtures_per_week']:.1f} fixtures per week."
+                )
+                st.caption(
+                    "This uses a Poisson model: it treats fixtures as happening randomly "
+                    "at the current average rate, then estimates the chance that enough "
+                    "will be completed by the deadline. It assumes the recent pace continues, "
+                    "so this is an estimate, not a guarantee."
+                )
 
         st.markdown("### Team position over time")
         st.caption(
