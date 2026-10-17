@@ -1,8 +1,8 @@
-## 1. League Structure & Divisions
+### 1. League Structure & Divisions
 
 The league comprises 14 pairs randomly drawn into two 7-team divisions:
 
-### 🟢 Emerald Division
+#### 🟢 Emerald Division
 
 1. Mark Bowe & Conor Molloy
 
@@ -26,7 +26,7 @@ The league comprises 14 pairs randomly drawn into two 7-team divisions:
 
 
 
-### ☘️ Shamrock Division
+#### ☘️ Shamrock Division
 
 1. Niall Behan & Noel O'Reilly
 
@@ -59,7 +59,7 @@ The league comprises 14 pairs randomly drawn into two 7-team divisions:
 
 ---
 
-## 2. Match Format & In-Game Rules
+### 2. Match Format & In-Game Rules
 
 * **Target Duration / Games:** Play exactly 17 games per match.
 
@@ -76,7 +76,7 @@ The league comprises 14 pairs randomly drawn into two 7-team divisions:
 
 ---
 
-## 3. League Points System
+### 3. League Points System
 
 | Component | Points Awarded | Details |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ The league comprises 14 pairs randomly drawn into two 7-team divisions:
 
 ---
 
-## 4. Time Expiration (1-Hour Slot Limitations)
+### 4. Time Expiration (1-Hour Slot Limitations)
 
 When playing within a 60-minute booking:
 
@@ -105,7 +105,7 @@ When playing within a 60-minute booking:
 
 ---
 
-## 5. What Happens in the Event of a Draw?
+### 5. What Happens in the Event of a Draw?
 
 * **Timed-Out Draws:** If the 1-hour limit expires and the score is level (e.g., 7–7 or 8–8), the match will be recorded as a Draw. Both pairs keep their games won and each receive +1 draw bonus point (e.g., an 8–8 score awards 9 points to each pair). Enter the result in the Google form (it doesn't matter who goes down as the winning/losing team in this case).
 
@@ -113,7 +113,7 @@ When playing within a 60-minute booking:
 
 ---
 
-## 6. What happens if we don't reach 17 total games played in the allotted time?
+### 6. What happens if we don't reach 17 total games played in the allotted time?
 
 If time runs out before 17 games are completed, then please share the remaining games in order to bring the score up to a full match.
 
@@ -126,6 +126,6 @@ If time runs out before 17 games are completed, then please share the remaining 
 
 ---
 
-## 7. Cross-divisional Games
+### 7. Cross-divisional Games
 
 One of the main pain points in organising this box league is the uncertainty surrounding player's current levels. In order to gain more information (and in preparation for the next iteration of this box league), I would encourage pairings to organise games also between teams from the other division, and record these scores using the Google form. You won't earn league points from these games, but they will hopefully encourage competition and provide valuable information for a bigger & better next iteration of the league.

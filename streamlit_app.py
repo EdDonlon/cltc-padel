@@ -56,14 +56,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Google Sheet Export URL configuration
-SHEET_ID = "1x-tP2lFaBGqMcWXN4QIErGF02FD3HZFD_IH4U32eiDU"
-EMERALD_GID = "1522007513"
-SHAMROCK_GID = "954276068"
-
 @st.cache_data(ttl=60)
-def load_league_data(gid):
-    csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
+def load_league_data(sheet_id, gid):
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
     df = pd.read_csv(csv_url, skiprows=1)
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
 
@@ -74,9 +69,9 @@ def load_league_data(gid):
     return df
 
 @st.cache_data(ttl=60)
-def load_results_data():
+def load_results_data(sheet_id):
     try:
-        csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Results"
+        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=Results"
         df = pd.read_csv(csv_url)
         return df
     except Exception:
@@ -408,6 +403,92 @@ def division_bar_chart(data, value_column, y_title, value_format, suffix=""):
     )
     return (bars + labels).properties(height=320)
 
+def build_position_history(standings, results, division_name):
+    columns = {"Date of Match", "Select your Box League Division",
+               "Winning Team", "Losing Team",
+               "Winning Team Score (Games won)", "Losing Team Score (Games won)"}
+    history_columns = ["Date", "Team", "Position"]
+    if "Team" not in standings.columns or not columns.issubset(results.columns):
+        return pd.DataFrame(columns=history_columns)
+
+    teams = standings["Team"].dropna().astype(str).str.strip()
+    teams = list(dict.fromkeys(team for team in teams if team))
+    if not teams:
+        return pd.DataFrame(columns=history_columns)
+
+    matches = results[
+        results["Select your Box League Division"]
+        .astype("string")
+        .str.contains(division_name, case=False, na=False, regex=False)
+    ].copy()
+    matches["_match_date"] = pd.to_datetime(
+        matches["Date of Match"], dayfirst=True, errors="coerce"
+    )
+    matches["_winner"] = matches["Winning Team"].astype("string").str.strip()
+    matches["_loser"] = matches["Losing Team"].astype("string").str.strip()
+    matches["_winning_games"] = pd.to_numeric(
+        matches["Winning Team Score (Games won)"], errors="coerce"
+    )
+    matches["_losing_games"] = pd.to_numeric(
+        matches["Losing Team Score (Games won)"], errors="coerce"
+    )
+    matches = matches[
+        matches["_match_date"].notna()
+        & matches["_winner"].isin(teams)
+        & matches["_loser"].isin(teams)
+        & matches["_winner"].ne(matches["_loser"])
+        & matches["_winning_games"].ge(0)
+        & matches["_losing_games"].ge(0)
+    ].sort_values("_match_date", kind="stable")
+    if matches.empty:
+        return pd.DataFrame(columns=history_columns)
+
+    points = dict.fromkeys(teams, 0)
+    history = []
+    for match_date, dated_matches in matches.groupby("_match_date", sort=True):
+        for _, match in dated_matches.iterrows():
+            winner, loser = match["_winner"], match["_loser"]
+            winning_games, losing_games = match["_winning_games"], match["_losing_games"]
+            points[winner] += winning_games
+            points[loser] += losing_games
+            if winning_games > losing_games:
+                points[winner] += 2
+            elif winning_games < losing_games:
+                points[loser] += 2
+            else:
+                points[winner] += 1
+                points[loser] += 1
+
+        positions = pd.Series(points).rank(method="min", ascending=False)
+        history.extend(
+            {"Date": match_date, "Team": team, "Position": positions[team]}
+            for team in teams
+        )
+
+    return pd.DataFrame(history, columns=history_columns)
+
+def team_position_chart(history):
+    team_count = history["Team"].nunique()
+    return alt.Chart(history).mark_line(
+        point=True, interpolate="linear"
+    ).encode(
+        x=alt.X("Date:T", title="Match date"),
+        y=alt.Y(
+            "Position:Q",
+            title="Position",
+            scale=alt.Scale(reverse=True, domain=[1, team_count]),
+            axis=alt.Axis(tickMinStep=1),
+        ),
+        color=alt.Color("Team:N", legend=alt.Legend(title="Team")),
+        detail="Team:N",
+        order="Date:T",
+        tooltip=[
+            alt.Tooltip("Date:T", title="Date"),
+            alt.Tooltip("Team:N"),
+            alt.Tooltip("Position:Q", format=".0f"),
+        ],
+    ).properties(height=360)
+
 def build_head_to_head_table(division_data, results_data, division_name):
     if "Team" not in division_data.columns:
         return pd.DataFrame()
@@ -542,9 +623,11 @@ st.markdown(
 )
 
 try:
-    emerald_df = load_league_data(EMERALD_GID)
-    shamrock_df = load_league_data(SHAMROCK_GID)
-    results_df = load_results_data()
+    sheet_ids = st.secrets["sheet_ids"]
+    spreadsheet_id = sheet_ids["spreadsheet_id"]
+    emerald_df = load_league_data(spreadsheet_id, sheet_ids["emerald_gid"])
+    shamrock_df = load_league_data(spreadsheet_id, sheet_ids["shamrock_gid"])
+    results_df = load_results_data(spreadsheet_id)
 
     # Create top-level tabs
     tab_emerald, tab_shamrock, tab_playoffs, tab_stats, tab_news, tab_rules = st.tabs([
@@ -748,6 +831,33 @@ try:
             ),
             use_container_width=True,
         )
+
+        st.markdown("### Team position over time")
+        st.caption(
+            "Positions are recalculated after each match date from cumulative league points. "
+            "Teams tied on points share a position."
+        )
+        emerald_history = build_position_history(emerald_df, results_df, "Emerald")
+        shamrock_history = build_position_history(shamrock_df, results_df, "Shamrock")
+        emerald_chart, shamrock_chart = st.columns(2)
+        with emerald_chart:
+            st.markdown("#### Emerald Division")
+            if emerald_history.empty:
+                st.info("No dated Emerald Division results are available yet.")
+            else:
+                st.altair_chart(
+                    team_position_chart(emerald_history),
+                    use_container_width=True,
+                )
+        with shamrock_chart:
+            st.markdown("#### Shamrock Division")
+            if shamrock_history.empty:
+                st.info("No dated Shamrock Division results are available yet.")
+            else:
+                st.altair_chart(
+                    team_position_chart(shamrock_history),
+                    use_container_width=True,
+                )
 
         st.markdown("### Playoff probability")
         st.caption(
